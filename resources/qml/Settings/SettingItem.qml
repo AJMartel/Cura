@@ -1,5 +1,5 @@
 // Copyright (c) 2015 Ultimaker B.V.
-// Uranium is released under the terms of the AGPLv3 or higher.
+// Uranium is released under the terms of the LGPLv3 or higher.
 
 import QtQuick 2.1
 import QtQuick.Layouts 1.1
@@ -27,13 +27,16 @@ Item {
 
     // Create properties to put property provider stuff in (bindings break in qt 5.5.1 otherwise)
     property var state: propertyProvider.properties.state
-    property var resolve: propertyProvider.properties.resolve
+    // There is no resolve property if there is only one stack.
+    property var resolve: Cura.MachineManager.activeStackId != Cura.MachineManager.activeMachineId ? propertyProvider.properties.resolve : "None"
     property var stackLevels: propertyProvider.stackLevels
     property var stackLevel: stackLevels[0]
 
+    signal focusReceived()
+    signal setActiveFocusToNextSetting(bool forward)
     signal contextMenuRequested()
-    signal showTooltip(string text);
-    signal hideTooltip();
+    signal showTooltip(string text)
+    signal hideTooltip()
     signal showAllHiddenInheritedSettings(string category_id)
     property string tooltipText:
     {
@@ -117,6 +120,7 @@ Item {
             elide: Text.ElideMiddle;
 
             color: UM.Theme.getColor("setting_control_text");
+            opacity: (definition.visible) ? 1 : 0.5
             // emphasize the setting if it has a value in the user or quality profile
             font: base.doQualityUserSettingEmphasis && base.stackLevel != undefined && base.stackLevel <= 1 ? UM.Theme.getFont("default_italic") : UM.Theme.getFont("default")
         }
@@ -126,11 +130,11 @@ Item {
             id: settingControls
 
             height: parent.height / 2
-            spacing: UM.Theme.getSize("default_margin").width / 2
+            spacing: UM.Theme.getSize("sidebar_margin").height / 2
 
             anchors {
                 right: controlContainer.left
-                rightMargin: UM.Theme.getSize("default_margin").width / 2
+                rightMargin: UM.Theme.getSize("sidebar_margin").width / 2
                 verticalCenter: parent.verticalCenter
             }
 
@@ -138,13 +142,11 @@ Item {
             {
                 id: linkedSettingIcon;
 
-                visible: Cura.MachineManager.activeStackId != Cura.MachineManager.activeMachineId && (!definition.settable_per_extruder || definition.limit_to_extruder != "-1") && base.showLinkedSettingIcon
+                visible: Cura.MachineManager.activeStackId != Cura.MachineManager.activeMachineId && (!definition.settable_per_extruder || String(globalPropertyProvider.properties.limit_to_extruder) != "-1") && base.showLinkedSettingIcon
 
                 height: parent.height;
                 width: height;
 
-                backgroundColor: UM.Theme.getColor("setting_control");
-                hoverBackgroundColor: UM.Theme.getColor("setting_control")
                 color: UM.Theme.getColor("setting_control_button")
                 hoverColor: UM.Theme.getColor("setting_control_button")
 
@@ -155,7 +157,7 @@ Item {
                     var tooltipText = catalog.i18nc("@label", "This setting is always shared between all extruders. Changing it here will change the value for all extruders") + ".";
                     if ((resolve != "None") && (stackLevel != 0)) {
                         // We come here if a setting has a resolve and the setting is not manually edited.
-                        tooltipText += " " + catalog.i18nc("@label", "The value is resolved from per-extruder values ") + "[" + ExtruderManager.getInstanceExtruderValues(definition.key) + "].";
+                        tooltipText += " " + catalog.i18nc("@label", "The value is resolved from per-extruder values ") + "[" + Cura.ExtruderManager.getInstanceExtruderValues(definition.key) + "].";
                     }
                     base.showTooltip(tooltipText);
                 }
@@ -171,8 +173,6 @@ Item {
                 height: parent.height;
                 width: height;
 
-                backgroundColor: UM.Theme.getColor("setting_control");
-                hoverBackgroundColor: UM.Theme.getColor("setting_control_highlight")
                 color: UM.Theme.getColor("setting_control_button")
                 hoverColor: UM.Theme.getColor("setting_control_button_hover")
 
@@ -208,15 +208,31 @@ Item {
                         // But this will cause the binding to be re-evaluated when the enabled property changes.
                         return false;
                     }
+
+                    // There are no settings with any warning.
                     if(Cura.SettingInheritanceManager.settingsWithInheritanceWarning.length == 0)
                     {
                         return false;
                     }
-                    if(globalPropertyProvider.properties.limit_to_extruder == null || globalPropertyProvider.properties.limit_to_extruder == -1)
+
+                    // This setting has a resolve value, so an inheritance warning doesn't do anything.
+                    if(resolve != "None")
+                    {
+                        return false
+                    }
+
+                    // If the setting does not have a limit_to_extruder property (or is -1), use the active stack.
+                    if(globalPropertyProvider.properties.limit_to_extruder == null || String(globalPropertyProvider.properties.limit_to_extruder) == "-1")
                     {
                         return Cura.SettingInheritanceManager.settingsWithInheritanceWarning.indexOf(definition.key) >= 0;
                     }
-                    return Cura.SettingInheritanceManager.getOverridesForExtruder(definition.key, globalPropertyProvider.properties.limit_to_extruder).indexOf(definition.key) >= 0;
+
+                    // Setting does have a limit_to_extruder property, so use that one instead.
+                    if (definition.key === undefined) {
+                        // Observed when loading workspace, probably when SettingItems are removed.
+                        return false;
+                    }
+                    return Cura.SettingInheritanceManager.getOverridesForExtruder(definition.key, String(globalPropertyProvider.properties.limit_to_extruder)).indexOf(definition.key) >= 0;
                 }
 
                 height: parent.height;
@@ -226,7 +242,7 @@ Item {
                     focus = true;
 
                     // Get the most shallow function value (eg not a number) that we can find.
-                    var last_entry = propertyProvider.stackLevels[propertyProvider.stackLevels.length]
+                    var last_entry = propertyProvider.stackLevels[propertyProvider.stackLevels.length - 1]
                     for (var i = 1; i < base.stackLevels.length; i++)
                     {
                         var has_setting_function = typeof(propertyProvider.getPropertyValue("value", base.stackLevels[i])) == "object";
@@ -260,8 +276,6 @@ Item {
                     }
                 }
 
-                backgroundColor: UM.Theme.getColor("setting_control");
-                hoverBackgroundColor: UM.Theme.getColor("setting_control_highlight")
                 color: UM.Theme.getColor("setting_control_button")
                 hoverColor: UM.Theme.getColor("setting_control_button_hover")
 
@@ -279,7 +293,7 @@ Item {
             enabled: propertyProvider.isValueUsed
 
             anchors.right: parent.right;
-            anchors.rightMargin: UM.Theme.getSize("default_margin").width
+            anchors.rightMargin: UM.Theme.getSize("sidebar_margin").width
             anchors.verticalCenter: parent.verticalCenter;
             width: UM.Theme.getSize("setting_control").width;
             height: UM.Theme.getSize("setting_control").height
